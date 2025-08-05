@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: ai_seller_postgres
+    environment:
+      POSTGRES_DB: ai_seller_analysis
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./setup_pgvector.sql:/docker-entrypoint-initdb.d/setup_pgvector.sql
+    networks:
+      - ai_seller_network
+
+  # Backend API
+  backend:
+    build: .
+    container_name: ai_seller_backend
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/ai_seller_analysis
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - FLASK_ENV=production
+    ports:
+      - "5000:5000"
+    depends_on:
+      - postgres
+    networks:
+      - ai_seller_network
+    volumes:
+      - ./data:/app/data
+
+  # Frontend
+  frontend:
+    build: ./frontend
+    container_name: ai_seller_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - ai_seller_network
+
+  # Redis (Cache için)
+  redis:
+    image: redis:alpine
+    container_name: ai_seller_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - ai_seller_network
+
+volumes:
+  postgres_data:
+
+networks:
+  ai_seller_network:
+    driver: bridge 
