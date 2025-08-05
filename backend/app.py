@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from rag_service import RAGService
     from gemini_service import GeminiService  
-    from create_missing_embeddings import EmbeddingCreator
+    from create_missing_embeddings import EmbeddingCreator, load_db_config
 except ImportError as e:
     print(f"❌ Import hatası: {e}")
     print("Ana dizindeki Python dosyalarına erişilemiyor.")
@@ -54,7 +54,11 @@ logger = logging.getLogger(__name__)
 try:
     rag_service = RAGService()
     gemini_service = GeminiService()
-    embedding_creator = EmbeddingCreator()
+    
+    # Veritabanı konfigürasyonunu yükle
+    db_config = load_db_config()
+    embedding_creator = EmbeddingCreator(db_config)
+    
     logger.info("✅ Tüm servisler başlatıldı")
 except Exception as e:
     logger.error(f"❌ Servis başlatma hatası: {e}")

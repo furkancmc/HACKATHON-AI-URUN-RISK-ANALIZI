@@ -27,9 +27,6 @@ import {
 import { apiService } from '../services/api';
 
 const { Search } = Input;
-const { Option } = Select;
-const { Panel } = Collapse;
-const { ListItem } = List;
 
 const ProductSearch = () => {
   const [loading, setLoading] = useState(false);
@@ -44,7 +41,6 @@ const ProductSearch = () => {
   const [analysisModal, setAnalysisModal] = useState({ visible: false, product: null, analysis: null });
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [brands, setBrands] = useState([]);
-  const [brandsLoading, setBrandsLoading] = useState(false);
 
   // İngilizce alan adlarını Türkçeye çevir
   const getTurkishFieldName = (fieldName) => {
@@ -120,7 +116,6 @@ const ProductSearch = () => {
   // Markaları yükle
   const loadBrands = async () => {
     try {
-      setBrandsLoading(true);
       const response = await apiService.getBrands();
       if (response.data.success) {
         setBrands(response.data.data);

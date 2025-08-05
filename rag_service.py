@@ -27,13 +27,21 @@ def cosine_similarity_np(a, b):
 class RAGService:
     def __init__(self):
         self.embedding_service = EmbeddingService()
-        self.connection_params = {
-            "host": "localhost",
-            "port": 5434,
-            "database": "urun_risk_analiz",
-            "user": "postgres", 
-            "password": "furkan"
-        }
+        # Veritabanı konfigürasyonunu yükle
+        try:
+            from create_missing_embeddings import load_db_config
+            db_config = load_db_config()
+            self.connection_params = db_config
+        except Exception as e:
+            logger.error(f"Veritabanı konfigürasyonu yüklenemedi: {e}")
+            # Fallback konfigürasyon
+            self.connection_params = {
+                "host": "localhost",
+                "port": 5432,
+                "database": "ai_seller_analysis",
+                "user": "postgres", 
+                "password": "your_password"
+            }
     
     def get_available_tables(self) -> List[str]:
         """Mevcut embedding tablolarını listele"""

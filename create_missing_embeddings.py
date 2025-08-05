@@ -1,247 +1,285 @@
-# create_missing_embeddings.py
 import psycopg2
+import numpy as np
+from sentence_transformers import SentenceTransformer
 import json
-from embedding_service import EmbeddingService
-import logging
+import time
 from typing import List, Dict, Any
+import logging
 
+# Logging ayarları
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class EmbeddingCreator:
-    def __init__(self):
-        self.embedding_service = EmbeddingService()
-        self.connection_params = {
-            "host": "localhost",
-            "port": 5434,
-            "database": "urun_risk_analiz",
-            "user": "postgres", 
-            "password": "furkan"
-        }
-    
-    def get_source_tables(self) -> List[str]:
-        """Kaynak tabloları listele"""
+    def __init__(self, db_config: Dict[str, str], model_name: str = 'all-MiniLM-L6-v2'):
+        """
+        Embedding oluşturucu sınıfı
+        
+        Args:
+            db_config: Veritabanı bağlantı bilgileri
+            model_name: Kullanılacak embedding modeli
+        """
+        self.db_config = db_config
+        self.model = SentenceTransformer(model_name)
+        self.connection = None
+        
+    def connect_db(self):
+        """Veritabanına bağlan"""
         try:
-            conn = psycopg2.connect(**self.connection_params)
-            cur = conn.cursor()
+            self.connection = psycopg2.connect(**self.db_config)
+            logger.info("Veritabanına başarıyla bağlandı")
+        except Exception as e:
+            logger.error(f"Veritabanı bağlantı hatası: {e}")
+            raise
+    
+    def close_db(self):
+        """Veritabanı bağlantısını kapat"""
+        if self.connection:
+            self.connection.close()
+            logger.info("Veritabanı bağlantısı kapatıldı")
+    
+    def get_products_without_embeddings(self, table_name: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Embedding'i olmayan ürünleri getir
+        
+        Args:
+            table_name: Tablo adı
+            limit: Maksimum ürün sayısı
             
-            cur.execute("""
-                SELECT table_name 
-                FROM information_schema.tables 
-                WHERE table_schema = 'public' 
-                AND table_name NOT LIKE '%_embeddings'
-                AND table_name NOT LIKE 'pg_%'
-                AND table_name NOT LIKE 'information_schema%'
-                ORDER BY table_name
-            """)
+        Returns:
+            Embedding'i olmayan ürünler listesi
+        """
+        try:
+            cursor = self.connection.cursor()
             
-            tables = [row[0] for row in cur.fetchall()]
-            cur.close()
-            conn.close()
+            # Embedding'i olmayan ürünleri getir
+            query = f"""
+                SELECT id, title, description, brand, category, price, rating
+                FROM {table_name}
+                WHERE embedding IS NULL
+                LIMIT %s
+            """
             
-            return tables
+            cursor.execute(query, (limit,))
+            products = cursor.fetchall()
+            
+            # Sonuçları dictionary formatına çevir
+            columns = ['id', 'title', 'description', 'brand', 'category', 'price', 'rating']
+            result = []
+            
+            for product in products:
+                product_dict = dict(zip(columns, product))
+                result.append(product_dict)
+            
+            cursor.close()
+            logger.info(f"{len(result)} adet embedding'i olmayan ürün bulundu")
+            return result
             
         except Exception as e:
-            logger.error(f"❌ Tablo listesi alınamadı: {e}")
-            return []
+            logger.error(f"Ürün getirme hatası: {e}")
+            raise
     
-    def get_existing_embedding_tables(self) -> List[str]:
-        """Mevcut embedding tablolarını listele"""
-        try:
-            conn = psycopg2.connect(**self.connection_params)
-            cur = conn.cursor()
+    def create_text_for_embedding(self, product: Dict[str, Any]) -> str:
+        """
+        Ürün bilgilerinden embedding için metin oluştur
+        
+        Args:
+            product: Ürün bilgileri
             
-            cur.execute("""
-                SELECT table_name 
-                FROM information_schema.tables 
-                WHERE table_schema = 'public' 
-                AND table_name LIKE '%_embeddings'
-                ORDER BY table_name
-            """)
-            
-            tables = [row[0] for row in cur.fetchall()]
-            cur.close()
-            conn.close()
-            
-            return tables
-            
-        except Exception as e:
-            logger.error(f"❌ Embedding tablo listesi alınamadı: {e}")
-            return []
-    
-    def create_embedding_table(self, source_table: str) -> bool:
-        """Embedding tablosu oluştur"""
-        try:
-            conn = psycopg2.connect(**self.connection_params)
-            cur = conn.cursor()
-            
-            embedding_table = f"{source_table}_embeddings"
-            
-            # Tablo oluştur
-            cur.execute(f"""
-                CREATE TABLE IF NOT EXISTS {embedding_table} (
-                    id SERIAL PRIMARY KEY,
-                    product_id VARCHAR(255),
-                    product_name TEXT,
-                    combined_text TEXT,
-                    embedding JSONB,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            # Index oluştur
-            cur.execute(f"""
-                CREATE INDEX IF NOT EXISTS idx_{embedding_table}_embedding 
-                ON {embedding_table} USING GIN (embedding)
-            """)
-            
-            conn.commit()
-            cur.close()
-            conn.close()
-            
-            logger.info(f"✅ {embedding_table} tablosu oluşturuldu")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ {embedding_table} tablosu oluşturulamadı: {e}")
-            return False
-    
-    def get_table_columns(self, table_name: str) -> List[str]:
-        """Tablo sütunlarını al"""
-        try:
-            conn = psycopg2.connect(**self.connection_params)
-            cur = conn.cursor()
-            
-            cur.execute(f"""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = '{table_name}'
-                ORDER BY ordinal_position
-            """)
-            
-            columns = [row[0] for row in cur.fetchall()]
-            cur.close()
-            conn.close()
-            
-            return columns
-            
-        except Exception as e:
-            logger.error(f"❌ {table_name} sütunları alınamadı: {e}")
-            return []
-    
-    def create_combined_text(self, row_data: Dict[str, Any]) -> str:
-        """Satır verilerinden combined text oluştur"""
+        Returns:
+            Embedding için hazırlanmış metin
+        """
         text_parts = []
         
-        # Önemli alanları birleştir
-        important_fields = ['name', 'title', 'product_name', 'brand', 'model', 'description', 'seller_description']
+        # Başlık
+        if product.get('title'):
+            text_parts.append(f"Ürün: {product['title']}")
         
-        for field in important_fields:
-            if field in row_data and row_data[field]:
-                text_parts.append(str(row_data[field]))
+        # Açıklama
+        if product.get('description'):
+            text_parts.append(f"Açıklama: {product['description']}")
         
-        # Diğer alanları da ekle (sayısal olmayan)
-        for key, value in row_data.items():
-            if key not in important_fields and value and not str(value).replace('.', '').replace(',', '').isdigit():
-                text_parts.append(str(value))
+        # Marka
+        if product.get('brand'):
+            text_parts.append(f"Marka: {product['brand']}")
         
-        return ' '.join(text_parts)
+        # Kategori
+        if product.get('category'):
+            text_parts.append(f"Kategori: {product['category']}")
+        
+        # Fiyat
+        if product.get('price'):
+            text_parts.append(f"Fiyat: {product['price']} TL")
+        
+        # Rating
+        if product.get('rating'):
+            text_parts.append(f"Değerlendirme: {product['rating']}/5")
+        
+        return " | ".join(text_parts)
     
-    def populate_embeddings(self, source_table: str, limit: int = 100) -> bool:
-        """Embedding tablosunu doldur"""
+    def create_embedding(self, text: str) -> List[float]:
+        """
+        Metin için embedding oluştur
+        
+        Args:
+            text: Embedding oluşturulacak metin
+            
+        Returns:
+            Embedding vektörü
+        """
         try:
-            conn = psycopg2.connect(**self.connection_params)
-            cur = conn.cursor()
+            embedding = self.model.encode(text)
+            return embedding.tolist()
+        except Exception as e:
+            logger.error(f"Embedding oluşturma hatası: {e}")
+            raise
+    
+    def update_product_embedding(self, table_name: str, product_id: int, embedding: List[float]):
+        """
+        Ürünün embedding'ini güncelle
+        
+        Args:
+            table_name: Tablo adı
+            product_id: Ürün ID'si
+            embedding: Embedding vektörü
+        """
+        try:
+            cursor = self.connection.cursor()
             
-            embedding_table = f"{source_table}_embeddings"
+            query = f"""
+                UPDATE {table_name}
+                SET embedding = %s
+                WHERE id = %s
+            """
             
-            # Kaynak tablo verilerini al
-            columns = self.get_table_columns(source_table)
-            if not columns:
-                return False
+            cursor.execute(query, (embedding, product_id))
+            self.connection.commit()
+            cursor.close()
             
-            columns_sql = ', '.join(columns)
-            cur.execute(f"SELECT {columns_sql} FROM {source_table} LIMIT %s", (limit,))
-            
-            rows = cur.fetchall()
-            logger.info(f"📊 {source_table}: {len(rows)} satır işlenecek")
-            
-            # Her satır için embedding oluştur
-            for i, row in enumerate(rows):
-                try:
-                    # Satır verilerini dict'e çevir
-                    row_data = dict(zip(columns, row))
-                    
-                    # ID alanını bul
-                    product_id = row_data.get('id') or row_data.get('product_id') or str(i)
-                    
-                    # Product name alanını bul
-                    product_name = (
-                        row_data.get('name') or 
-                        row_data.get('title') or 
-                        row_data.get('product_name') or 
-                        f"Ürün {i+1}"
-                    )
-                    
-                    # Combined text oluştur
-                    combined_text = self.create_combined_text(row_data)
-                    
-                    if not combined_text.strip():
-                        combined_text = f"{product_name} ürün"
-                    
-                    # Embedding oluştur
-                    embedding = self.embedding_service.create_embedding(combined_text)
-                    
-                    if embedding:
-                        # Embedding tablosuna ekle (conflict olmadan)
-                        cur.execute(f"""
-                            INSERT INTO {embedding_table} 
-                            (product_id, product_name, combined_text, embedding)
-                            VALUES (%s, %s, %s, %s)
-                        """, (product_id, product_name, combined_text, json.dumps(embedding)))
-                        
-                        if (i + 1) % 10 == 0:
-                            logger.info(f"📝 {source_table}: {i+1}/{len(rows)} embedding oluşturuldu")
-                
-                except Exception as e:
-                    logger.warning(f"⚠️ Satır {i} embedding hatası: {e}")
-                    continue
-            
-            conn.commit()
-            cur.close()
-            conn.close()
-            
-            logger.info(f"✅ {embedding_table} tablosu dolduruldu")
-            return True
+            logger.info(f"Ürün {product_id} için embedding güncellendi")
             
         except Exception as e:
-            logger.error(f"❌ {source_table} embedding doldurma hatası: {e}")
-            return False
+            logger.error(f"Embedding güncelleme hatası: {e}")
+            self.connection.rollback()
+            raise
     
-    def create_missing_embeddings(self):
-        """Eksik embedding tablolarını oluştur"""
-        source_tables = self.get_source_tables()
-        existing_embedding_tables = self.get_existing_embedding_tables()
+    def process_table(self, table_name: str, batch_size: int = 50):
+        """
+        Tablodaki eksik embedding'leri oluştur
         
-        logger.info(f"📋 Kaynak tablolar: {source_tables}")
-        logger.info(f"📋 Mevcut embedding tabloları: {existing_embedding_tables}")
-        
-        for source_table in source_tables:
-            embedding_table = f"{source_table}_embeddings"
+        Args:
+            table_name: İşlenecek tablo adı
+            batch_size: Toplu işlem boyutu
+        """
+        try:
+            logger.info(f"{table_name} tablosu için embedding oluşturma başlatılıyor...")
             
-            if embedding_table not in existing_embedding_tables:
-                logger.info(f"🔨 {embedding_table} tablosu oluşturuluyor...")
+            total_processed = 0
+            
+            while True:
+                # Embedding'i olmayan ürünleri getir
+                products = self.get_products_without_embeddings(table_name, batch_size)
                 
-                # Tablo oluştur
-                if self.create_embedding_table(source_table):
-                    # Embedding'leri doldur
-                    self.populate_embeddings(source_table, limit=200)
-            else:
-                logger.info(f"✅ {embedding_table} zaten mevcut")
+                if not products:
+                    logger.info(f"Tüm embedding'ler tamamlandı. Toplam {total_processed} ürün işlendi.")
+                    break
+                
+                logger.info(f"{len(products)} ürün işleniyor...")
+                
+                for product in products:
+                    try:
+                        # Embedding için metin oluştur
+                        text = self.create_text_for_embedding(product)
+                        
+                        # Embedding oluştur
+                        embedding = self.create_embedding(text)
+                        
+                        # Veritabanını güncelle
+                        self.update_product_embedding(table_name, product['id'], embedding)
+                        
+                        total_processed += 1
+                        
+                        # Kısa bekleme (rate limiting için)
+                        time.sleep(0.1)
+                        
+                    except Exception as e:
+                        logger.error(f"Ürün {product.get('id')} işlenirken hata: {e}")
+                        continue
+                
+                logger.info(f"Batch tamamlandı. Toplam {total_processed} ürün işlendi.")
+                
+        except Exception as e:
+            logger.error(f"Tablo işleme hatası: {e}")
+            raise
+
+def load_db_config(config_file: str = 'db_config.txt') -> Dict[str, str]:
+    """
+    Veritabanı konfigürasyonunu yükle
+    
+    Args:
+        config_file: Konfigürasyon dosyası
+        
+    Returns:
+        Veritabanı bağlantı bilgileri
+    """
+    config = {}
+    try:
+        # Ana dizindeki db_config.txt dosyasını bul
+        import os
+        current_dir = os.getcwd()
+        
+        # Eğer backend klasöründeyse, bir üst dizine çık
+        if os.path.basename(current_dir) == 'backend':
+            config_path = os.path.join(os.path.dirname(current_dir), config_file)
+        else:
+            config_path = config_file
+            
+        with open(config_path, 'r') as f:
+            for line in f:
+                if '=' in line:
+                    key, value = line.strip().split('=', 1)
+                    config[key.strip()] = value.strip()
+        
+        # Port'u integer'a çevir
+        if 'port' in config:
+            config['port'] = int(config['port'])
+            
+        logger.info("Veritabanı konfigürasyonu yüklendi")
+        return config
+        
+    except Exception as e:
+        logger.error(f"Konfigürasyon yükleme hatası: {e}")
+        raise
 
 def main():
-    creator = EmbeddingCreator()
-    creator.create_missing_embeddings()
+    """Ana fonksiyon"""
+    try:
+        # Veritabanı konfigürasyonunu yükle
+        db_config = load_db_config()
+        
+        # Embedding oluşturucuyu başlat
+        creator = EmbeddingCreator(db_config)
+        
+        # Veritabanına bağlan
+        creator.connect_db()
+        
+        # Tabloları işle
+        tables = ['telephone_products', 'computer_products', 'klima_products', 'kulaklık_products']
+        
+        for table in tables:
+            try:
+                creator.process_table(table)
+            except Exception as e:
+                logger.error(f"{table} tablosu işlenirken hata: {e}")
+                continue
+        
+        logger.info("Tüm tablolar için embedding oluşturma tamamlandı!")
+        
+    except Exception as e:
+        logger.error(f"Ana fonksiyon hatası: {e}")
+    finally:
+        if 'creator' in locals():
+            creator.close_db()
 
 if __name__ == "__main__":
     main() 

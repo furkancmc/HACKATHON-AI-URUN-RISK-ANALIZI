@@ -13,8 +13,6 @@ import {
   Divider
 } from 'antd';
 import { 
-  CheckCircleOutlined, 
-  ExclamationCircleOutlined, 
   ReloadOutlined,
   DatabaseOutlined,
   BugOutlined,

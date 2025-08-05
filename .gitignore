@@ -95,6 +95,7 @@ api_keys.txt
 
 # Database config
 db_config.txt
+.env
 
 # Large JSON data files (keep only small ones)
 kulaklık_sonnnn.json

@@ -17,7 +17,6 @@ const { TabPane } = Tabs;
 
 function App() {
   const [systemHealth, setSystemHealth] = useState(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     checkSystemHealth();
@@ -34,8 +33,6 @@ function App() {
     } catch (error) {
       message.error('Backend bağlantısı kurulamadı. Lütfen backend sunucusunu başlatın.');
       console.error('Health check failed:', error);
-    } finally {
-      setLoading(false);
     }
   };
 
